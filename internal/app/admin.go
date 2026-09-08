@@ -474,6 +474,7 @@ func (admin *runtimeAdmin) VerifyAccount(ctx context.Context, accountID string) 
 		if verification.Authenticated {
 			return errors.Join(
 				admin.pool.MarkReady(account.ID),
+				admin.pool.ResetCooldowns(account.ID),
 				admin.pool.ResetModelAccess(account.ID),
 				admin.pool.SetCatalog(account.ID, account.BenefitTier, nil),
 			)
