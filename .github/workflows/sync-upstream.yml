@@ -19,7 +19,7 @@ env:
 
 jobs:
   sync:
-    name: Sync upstream with downstream file guard
+    name: Sync upstream with Git merge conflict detection
     runs-on: ubuntu-latest
     steps:
       - name: Check out maintained branch
@@ -42,7 +42,7 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Compare upstream and downstream file sets
+      - name: Merge upstream into candidate branch
         id: compare
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -56,107 +56,64 @@ jobs:
 
           upstream_sha="$(git rev-parse upstream/main)"
           upstream_title="$(git log -1 --format=%s upstream/main)"
-          if git merge-base --is-ancestor upstream/main HEAD; then
-            echo "status=already_current" >> "$GITHUB_OUTPUT"
-            echo "upstream_sha=${upstream_sha}" >> "$GITHUB_OUTPUT"
-            echo "upstream_title=${upstream_title}" >> "$GITHUB_OUTPUT"
-            echo "Upstream is already contained in ${TARGET_BRANCH}."
-            exit 0
-          fi
-
-          # The merge base is the last upstream revision already represented by
-          # the maintained branch. Compare only changes since that revision.
-          old_base="$(git merge-base HEAD upstream/main)"
-          upstream_files="$(git diff --name-only "$old_base" upstream/main | sort -u)"
-          downstream_files="$(git diff --name-only "$old_base" HEAD | sort -u)"
-          overlap="$(comm -12 \
-            <(printf '%s\n' "$upstream_files" | sed '/^$/d' | sort -u) \
-            <(printf '%s\n' "$downstream_files" | sed '/^$/d' | sort -u) \
-          )"
-
           {
             echo "upstream_sha=${upstream_sha}"
             echo "upstream_title<<SYNC_EOF"
             echo "$upstream_title"
             echo "SYNC_EOF"
-            echo "old_base=${old_base}"
-            echo "upstream_files<<SYNC_EOF"
-            echo "$upstream_files"
-            echo "SYNC_EOF"
-            echo "downstream_files<<SYNC_EOF"
-            echo "$downstream_files"
-            echo "SYNC_EOF"
-            echo "overlap<<SYNC_EOF"
-            echo "$overlap"
-            echo "SYNC_EOF"
           } >> "$GITHUB_OUTPUT"
 
-          if [ -n "$overlap" ]; then
-            body_file="$(mktemp)"
-            {
-              echo "## Downstream review required"
-              echo
-              echo "The upstream update overlaps files changed by this downstream fork. The maintained branch was not changed."
-              echo
-              echo "- Upstream repository: ${UPSTREAM_REPO}"
-              echo "- Upstream commit: ${upstream_sha} (${upstream_title})"
-              echo "- Previously synchronized base: ${old_base}"
-              echo
-              echo "### Overlapping files"
-              echo '```text'
-              echo "$overlap"
-              echo '```'
-              echo
-              echo "### Review policy"
-              echo "1. Inspect the upstream changes in the overlapping files."
-              echo "2. If upstream already provides the downstream behavior, remove the redundant local code and follow upstream."
-              echo "3. If upstream only changed the surrounding implementation, adapt the downstream behavior to the new code."
-              echo "4. Run the repository validation and push the reviewed result."
-              echo
-              echo "Actions run: https://github.com/${GITHUB_REPOSITORY}/actions"
-            } > "$body_file"
-
-            existing="$(gh issue list --state open --search "[upstream-sync] Review ${upstream_sha:0:8} in:title" --json number --jq 'length')"
-            if [ "$existing" = "0" ]; then
-              gh issue create \
-                --title "[upstream-sync] Review overlapping downstream files (${upstream_sha:0:8})" \
-                --body-file "$body_file" || true
-            fi
-            rm -f "$body_file"
-            echo "status=overlap" >> "$GITHUB_OUTPUT"
-            exit 10
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "status=already_current" >> "$GITHUB_OUTPUT"
+            echo "Upstream is already contained in ${TARGET_BRANCH}."
+            exit 0
           fi
 
           candidate_branch="sync-check-${GITHUB_RUN_ID}"
           git checkout -b "$candidate_branch"
-          if ! git merge --no-commit --no-ff upstream/main; then
-            conflict_files="$(git diff --name-only --diff-filter=U | sort -u || true)"
-            git merge --abort || git reset --hard HEAD
-            body_file="$(mktemp)"
-            {
-              echo "## Upstream merge conflict"
-              echo
-              echo "The file guard found no direct overlap, but the candidate merge still conflicted. The maintained branch was not changed."
-              echo
-              echo "- Upstream commit: ${upstream_sha}"
-              echo "- **Conflict files**:"
-              echo '```text'
-              echo "$conflict_files"
-              echo '```'
-              echo
-              echo "Actions run: https://github.com/${GITHUB_REPOSITORY}/actions"
-            } > "$body_file"
+          if git merge --no-commit --no-ff upstream/main; then
+            echo "candidate_branch=${candidate_branch}" >> "$GITHUB_OUTPUT"
+            echo "status=clean" >> "$GITHUB_OUTPUT"
+            echo "Upstream merge completed without textual conflicts."
+            exit 0
+          fi
+
+          conflict_files="$(git diff --name-only --diff-filter=U | sort -u || true)"
+          if [ -z "$conflict_files" ]; then
+            conflict_files="(merge failed without a normal unmerged-file list; inspect the workflow log)"
+          fi
+          git merge --abort || git reset --hard HEAD
+
+          body_file="$(mktemp)"
+          {
+            echo "## Upstream merge conflict"
+            echo
+            echo "The candidate merge of upstream ${UPSTREAM_REPO} conflicted. The maintained branch was not changed."
+            echo
+            echo "- Upstream commit: ${upstream_sha} (${upstream_title})"
+            echo "- **Conflicting files:**"
+            echo '```text'
+            echo "$conflict_files"
+            echo '```'
+            echo
+            echo "A clean Git merge is required before automated tests, container validation, and promotion can continue."
+            echo
+            echo "Actions run: https://github.com/${GITHUB_REPOSITORY}/actions"
+          } > "$body_file"
+
+          existing="$(gh issue list --state open --search "[upstream-sync] Merge conflict ${upstream_sha:0:8} in:title" --json number --jq 'length')"
+          if [ "$existing" = "0" ]; then
             gh issue create \
               --title "[upstream-sync] Merge conflict (${upstream_sha:0:8})" \
               --body-file "$body_file" || true
-            rm -f "$body_file"
-            echo "status=merge_conflict" >> "$GITHUB_OUTPUT"
-            exit 10
           fi
+          rm -f "$body_file"
+          echo "status=merge_conflict" >> "$GITHUB_OUTPUT"
+          exit 10
 
-          echo "candidate_branch=${candidate_branch}" >> "$GITHUB_OUTPUT"
-          echo "status=clean" >> "$GITHUB_OUTPUT"
-          echo "No downstream file overlap. Candidate merge is ready for validation."
+      - name: Check merged diff
+        if: steps.compare.outputs.status == 'clean'
+        run: git diff --cached --check
 
       - name: Run Go validation
         if: steps.compare.outputs.status == 'clean'
