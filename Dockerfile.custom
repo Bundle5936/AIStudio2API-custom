@@ -1,29 +1,33 @@
-# 阶段 1: 前端构建 (Alpine)
-FROM node:current-alpine AS frontend-builder
+# syntax=docker/dockerfile:1
+
+# Frontend output is architecture-independent; build it on the native runner.
+FROM --platform=$BUILDPLATFORM node:current-alpine AS frontend-builder
 WORKDIR /app
 COPY web/package*.json ./web/
 RUN cd web && npm ci
 COPY web/ ./web/
 RUN cd web && npm run build
 
-# 阶段 2: Go 二进制构建
-FROM golang:bookworm AS backend-builder
+# Go is cross-compiled on the native runner for the requested target platform.
+FROM --platform=$BUILDPLATFORM golang:bookworm AS backend-builder
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend-builder /app/internal/webui/dist ./internal/webui/dist
 
-# 自动在编译镜像内部打补丁（不改动宿主机任何 Git 源码，保证随时无冲突 git pull 追新）
-RUN if [ -f custom.patch ]; then       apt-get update && apt-get install -y patch &&       patch -p1 < custom.patch;     fi
+# Apply the private deployment customization only in the build workspace.
+RUN if [ -f custom.patch ]; then           apt-get update && apt-get install -y --no-install-recommends patch &&           patch -p1 < custom.patch;         fi
 
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o aistudio-omni ./cmd/aistudio2api
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH         go build -ldflags="-s -w" -o aistudio-omni ./cmd/aistudio2api
 
-# 阶段 3: 最小无头运行环境 (Debian Slim)
+# Target-platform runtime image.
 FROM debian:bookworm-slim
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends     ca-certificates     curl     libgtk-3-0     libasound2     libx11-xcb1     libxcomposite1     libxcursor1     libxdamage1     libxext6     libxfixes3     libxi6     libxrandr2     libxrender1     libxtst6     libnss3     libdbus-glib-1-2     && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends           ca-certificates           curl           libgtk-3-0           libasound2           libx11-xcb1           libxcomposite1           libxcursor1           libxdamage1           libxext6           libxfixes3           libxi6           libxrandr2           libxrender1           libxtst6           libnss3           libdbus-glib-1-2         && rm -rf /var/lib/apt/lists/*
 
 COPY --from=backend-builder /app/aistudio-omni ./aistudio-omni
 
