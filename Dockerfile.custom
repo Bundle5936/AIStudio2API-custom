@@ -18,16 +18,8 @@ RUN go mod download
 COPY . .
 COPY --from=frontend-builder /app/internal/webui/dist ./internal/webui/dist
 
-# Apply atomic private patches sequentially in the build workspace.
-RUN apt-get update && apt-get install -y --no-install-recommends patch && \
-    if [ -d patches ] && ls patches/*.patch >/dev/null 2>&1; then \
-      for p in patches/*.patch; do \
-        echo "=== Applying patch: $p ===" && patch -p1 < "$p"; \
-      done; \
-    elif [ -f custom.patch ]; then \
-      patch -p1 < custom.patch; \
-    fi
-
+# The source tree already contains the downstream customizations. No runtime patch
+# application is performed here, so CI and the image build compile identical code.
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags="-s -w" -o aistudio-omni ./cmd/aistudio2api
 
