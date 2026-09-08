@@ -77,22 +77,23 @@ jobs:
             git merge --abort || git reset --hard HEAD
             
             body_file="$(mktemp)"
-            cat > "$body_file" <<EOF
-## Upstream sync conflict
+            {
+              echo "## Upstream sync conflict"
+              echo ""
+              echo "The maintained branch \`${TARGET_BRANCH}\` encountered git merge conflicts with \`${UPSTREAM_REPO}:main\`."
+              echo ""
+              echo "- **Upstream commit**: \`${upstream_sha}\` (\"${upstream_title}\")"
+              echo "- **Conflicting files**:"
+              echo '```'
+              echo "${conflict_files}"
+              echo '```'
+              echo ""
+              echo "Review required:"
+              echo "1. Inspect upstream changes in the conflicting files."
+              echo "2. If upstream changes cover downstream requirements, adapt and resolve conflicts."
+              echo "3. Verify build and tests, then update \`${TARGET_BRANCH}\`."
+            } > "$body_file"
 
-The maintained branch \`${TARGET_BRANCH}\` encountered git merge conflicts with \`${UPSTREAM_REPO}:main\`.
-
-- **Upstream commit**: \`${upstream_sha}\` ("${upstream_title}")
-- **Conflicting files**:
-\`\`\`
-${conflict_files}
-\`\`\`
-
-Review required:
-1. Inspect upstream changes in the conflicting files.
-2. If upstream changes cover downstream requirements, adapt and resolve conflicts.
-3. Verify build and tests, then update \`${TARGET_BRANCH}\`.
-EOF
             existing="$(gh issue list --state open --search "[upstream-sync] Merge conflict ${upstream_sha:0:8} in:title" --json number --jq 'length')"
             if [ "$existing" = "0" ]; then
               gh issue create \
@@ -120,22 +121,23 @@ EOF
             git merge --abort || git reset --hard HEAD
             
             body_file="$(mktemp)"
-            cat > "$body_file" <<EOF
-## Local patch reconciliation needed
+            {
+              echo "## Local patch reconciliation needed"
+              echo ""
+              echo "The maintained branch \`${TARGET_BRANCH}\` merged upstream code, but patch \`${failed_patch}\` failed to apply cleanly."
+              echo ""
+              echo "- **Upstream commit**: \`${upstream_sha}\` (\"${upstream_title}\")"
+              echo "- **Failed patch**: \`${failed_patch}\`"
+              echo "- **Patch Intent Registry**: See \`patches/PATCHES.md\`"
+              echo ""
+              echo "Review required:"
+              echo "1. Refer to \`patches/PATCHES.md\` for the intent of \`${failed_patch}\`."
+              echo "2. Check upstream's latest implementation:"
+              echo "   - If upstream natively covers this intent: remove \`${failed_patch}\` and follow upstream logic."
+              echo "   - If upstream does not cover it: rebase/regenerate the patch against the new context."
+              echo "3. Verify compilation and push the updated branch."
+            } > "$body_file"
 
-The maintained branch \`${TARGET_BRANCH}\` merged upstream code, but patch \`${failed_patch}\` failed to apply cleanly.
-
-- **Upstream commit**: \`${upstream_sha}\` ("${upstream_title}")
-- **Failed patch**: \`${failed_patch}\`
-- **Patch Intent Registry**: See \`patches/PATCHES.md\`
-
-Review required:
-1. Refer to \`patches/PATCHES.md\` for the intent of \`${failed_patch}\`.
-2. Check upstream's latest implementation:
-   - If upstream natively covers this intent: remove \`${failed_patch}\` and follow upstream logic.
-   - If upstream does not cover it (context shifted): rebase/regenerate the patch against the new context.
-3. Verify compilation and push the updated branch.
-EOF
             existing="$(gh issue list --state open --search "[upstream-sync] Patch ${failed_patch} in:title" --json number --jq 'length')"
             if [ "$existing" = "0" ]; then
               gh issue create \
