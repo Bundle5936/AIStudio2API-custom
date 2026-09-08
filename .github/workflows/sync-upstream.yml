@@ -7,24 +7,176 @@ on:
 
 permissions:
   contents: write
+  issues: write
+
+concurrency:
+  group: upstream-sync-aistudio
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: main
+  UPSTREAM_REPO: Mag1cFall/AIStudio2API
 
 jobs:
   sync:
+    name: Sync upstream and reconcile patches
     runs-on: ubuntu-latest
     steps:
       - name: Checkout fork
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
-          persist-credentials: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Merge upstream main
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: Fetch and test upstream merge
+        id: sync_check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          set -euo pipefail
+          set -u
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://github.com/Mag1cFall/AIStudio2API.git
-          git fetch --prune upstream main
-          git checkout main
-          git merge --no-edit upstream/main
-          git push origin main
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" || true
+          git fetch upstream main --prune
+
+          upstream_sha="$(git rev-parse upstream/main)"
+          upstream_title="$(git log -1 --format=%s upstream/main)"
+          echo "upstream_sha=${upstream_sha}" >> "$GITHUB_OUTPUT"
+          echo "upstream_title=${upstream_title}" >> "$GITHUB_OUTPUT"
+          echo "Upstream main commit: ${upstream_sha} - ${upstream_title}"
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "already_current=true" >> "$GITHUB_OUTPUT"
+            echo "Already up-to-date with upstream main."
+            exit 0
+          fi
+          echo "already_current=false" >> "$GITHUB_OUTPUT"
+
+          test_branch="test-sync-$(date +%s)"
+          git checkout -b "$test_branch"
+
+          # 1. Merge upstream/main into test workspace
+          if ! git merge --no-commit --no-ff upstream/main; then
+            echo "Git merge conflict with upstream/main"
+            conflict_files="$(git diff --name-only --diff-filter=U | sort)"
+            git merge --abort || git reset --hard HEAD
+            
+            body_file="$(mktemp)"
+            cat > "$body_file" <<EOF
+## Upstream sync conflict
+
+The maintained branch \`${TARGET_BRANCH}\` encountered git merge conflicts with \`${UPSTREAM_REPO}:main\`.
+
+- **Upstream commit**: \`${upstream_sha}\` ("${upstream_title}")
+- **Conflicting files**:
+\`\`\`
+${conflict_files}
+\`\`\`
+
+【呼叫 LXC Pi 审查指令】
+1. 检查上游在上述文件中的最新改动；
+2. 若上游改动已覆盖相应业务需求，调整并解决冲突；
+3. 测试通过后推送到 \`${TARGET_BRANCH}\`。
+EOF
+            existing="$(gh issue list --state open --search "[upstream-sync] Merge conflict ${upstream_sha:0:8} in:title" --json number --jq 'length')"
+            if [ "$existing" = "0" ]; then
+              gh issue create \
+                --title "[upstream-sync] Merge conflict with upstream main (${upstream_sha:0:8})" \
+                --body-file "$body_file" || true
+            fi
+            rm -f "$body_file"
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+            exit 10
+          fi
+
+          # 2. Check each atomic patch
+          failed_patch=""
+          for p in patches/*.patch; do
+            if [ ! -f "$p" ]; then continue; fi
+            echo "Testing patch: $p"
+            if ! patch -p1 --dry-run < "$p"; then
+              failed_patch="$p"
+              break
+            fi
+          done
+
+          if [ -n "$failed_patch" ]; then
+            echo "Patch application failed: $failed_patch"
+            git merge --abort || git reset --hard HEAD
+            
+            body_file="$(mktemp)"
+            cat > "$body_file" <<EOF
+## Local patch reconciliation needed
+
+The maintained branch \`${TARGET_BRANCH}\` merged upstream code, but atomic patch \`${failed_patch}\` failed to apply cleanly.
+
+- **Upstream commit**: \`${upstream_sha}\` ("${upstream_title}")
+- **Failed patch**: \`${failed_patch}\`
+- **Patch Intent Registry**: See \`patches/PATCHES.md\`
+
+【呼叫 LXC Pi 审查与决策指令】
+1. 查阅 \`patches/PATCHES.md\` 中 \`${failed_patch}\` 的意图；
+2. 检查上游对应文件的最新实现：
+   - 若上游已原生满足该意图：直接删除 \`${failed_patch}\`，遵循上游原生逻辑；
+   - 若上游未实现（仅代码上下文漂移）：结合上游新上下文重新生成该补丁；
+3. 本地验证编译，确认后提交推送到 \`${TARGET_BRANCH}\`。
+EOF
+            existing="$(gh issue list --state open --search "[upstream-sync] Patch ${failed_patch} in:title" --json number --jq 'length')"
+            if [ "$existing" = "0" ]; then
+              gh issue create \
+                --title "[upstream-sync] Patch reconciliation needed for ${failed_patch} (${upstream_sha:0:8})" \
+                --body-file "$body_file" || true
+            fi
+            rm -f "$body_file"
+            echo "status=patch_failed" >> "$GITHUB_OUTPUT"
+            exit 10
+          fi
+
+          # 3. Apply all patches in test workspace
+          for p in patches/*.patch; do
+            if [ -f "$p" ]; then
+              echo "Applying: $p"
+              patch -p1 < "$p"
+            fi
+          done
+
+          echo "status=clean" >> "$GITHUB_OUTPUT"
+
+      - name: Verify compilation on merged and patched code
+        if: steps.sync_check.outputs.status == 'clean'
+        run: |
+          echo "Verifying Go backend build..."
+          CGO_ENABLED=0 go build -ldflags="-s -w" -o /tmp/aistudio-verify ./cmd/aistudio2api
+          rm -f /tmp/aistudio-verify
+
+          echo "Verifying Web frontend build..."
+          cd web
+          npm ci
+          npm run build
+          cd ..
+
+      - name: Commit and push tested sync to main
+        if: steps.sync_check.outputs.status == 'clean'
+        env:
+          UPSTREAM_SHA: ${{ steps.sync_check.outputs.upstream_sha }}
+          UPSTREAM_TITLE: ${{ steps.sync_check.outputs.upstream_title }}
+        run: |
+          git checkout "${TARGET_BRANCH}"
+          git merge --no-edit "upstream/main"
+          git commit --amend -m "chore(sync): merge upstream main (${UPSTREAM_SHA:0:8} ${UPSTREAM_TITLE})" || true
+          git push origin "${TARGET_BRANCH}"

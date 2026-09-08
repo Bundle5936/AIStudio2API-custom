@@ -1,0 +1,40 @@
+diff --git a/internal/camoufoxnative/worker.go b/internal/camoufoxnative/worker.go
+index e5e1272..1973393 100644
+--- a/internal/camoufoxnative/worker.go
++++ b/internal/camoufoxnative/worker.go
+@@ -279,14 +279,32 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
+ 	if interceptID == "" {
+ 		return errors.New("GenerateContent 拦截 ID 无效")
+ 	}
++	diag, _ := client.evaluateString(ctx, contextID, `(() => {
++  const msRun = document.querySelector('ms-run-button');
++  if (!msRun) {
++    const all = [...document.querySelectorAll('button')].map(b => (b.innerText||b.getAttribute('aria-label')||b.className).trim()).filter(Boolean);
++    return 'NO_MS_RUN: ' + all.slice(0, 10).join('; ');
++  }
++  const btn = msRun.querySelector('button');
++  if (!btn) return 'NO_BTN_IN_MSRUN: ' + msRun.outerHTML.substring(0, 150);
++  return 'FOUND: tag=' + btn.tagName + ' type=' + btn.type + ' disabled=' + btn.disabled + ' text=' + btn.innerText;
++})()`)
+ 	clicked, err := client.evaluateBool(ctx, contextID, `(() => {
+-  const button = [...document.querySelectorAll('ms-run-button button[type="submit"]')].at(-1);
+-  if (!button || button.disabled) return false;
++  const msRun = document.querySelector('ms-run-button');
++  let button = msRun ? msRun.querySelector('button') : null;
++  if (!button) {
++    button = [...document.querySelectorAll('button')].find(b => /Run/i.test(b.innerText || b.getAttribute('aria-label') || ''));
++  }
++  if (!button) return false;
++  if (button.disabled) {
++    button.removeAttribute('disabled');
++    button.disabled = false;
++  }
+   button.click();
+   return true;
+ })()`)
+ 	if err != nil || !clicked {
+-		return fmt.Errorf("官网 Run 按钮不可用 clicked=%t err=%v", clicked, err)
++		return fmt.Errorf("官网 Run 按钮不可用 clicked=%t diag=%s err=%v", clicked, diag, err)
+ 	}
+ 	if err := client.waitFor(ctx, contextID, "Boolean(window.__aistudioWaaService)", 60*time.Second); err != nil {
+ 		return fmt.Errorf("官网 WAA service 未暴露: %w", err)

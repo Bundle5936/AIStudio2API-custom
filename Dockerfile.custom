@@ -18,16 +18,41 @@ RUN go mod download
 COPY . .
 COPY --from=frontend-builder /app/internal/webui/dist ./internal/webui/dist
 
-# Apply the private deployment customization only in the build workspace.
-RUN if [ -f custom.patch ]; then           apt-get update && apt-get install -y --no-install-recommends patch &&           patch -p1 < custom.patch;         fi
+# Apply atomic private patches sequentially in the build workspace.
+RUN apt-get update && apt-get install -y --no-install-recommends patch && \
+    if [ -d patches ] && ls patches/*.patch >/dev/null 2>&1; then \
+      for p in patches/*.patch; do \
+        echo "=== Applying patch: $p ===" && patch -p1 < "$p"; \
+      done; \
+    elif [ -f custom.patch ]; then \
+      patch -p1 < custom.patch; \
+    fi
 
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH         go build -ldflags="-s -w" -o aistudio-omni ./cmd/aistudio2api
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -ldflags="-s -w" -o aistudio-omni ./cmd/aistudio2api
 
 # Target-platform runtime image.
 FROM debian:bookworm-slim
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends           ca-certificates           curl           libgtk-3-0           libasound2           libx11-xcb1           libxcomposite1           libxcursor1           libxdamage1           libxext6           libxfixes3           libxi6           libxrandr2           libxrender1           libxtst6           libnss3           libdbus-glib-1-2         && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    libgtk-3-0 \
+    libasound2 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxcursor1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxi6 \
+    libxrandr2 \
+    libxrender1 \
+    libxtst6 \
+    libnss3 \
+    libdbus-glib-1-2 \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=backend-builder /app/aistudio-omni ./aistudio-omni
 
