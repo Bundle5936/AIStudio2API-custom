@@ -1797,6 +1797,18 @@ func (p *AccountPool) MarkCooldownIfGeneration(
 }
 
 // ClearCooldownIfGeneration 清除当前目录代际中的作用域冷却
+// ResetCooldowns 清空账户的所有模型与全局冷却
+func (p *AccountPool) ResetCooldowns(accountID string) error {
+	_, err := p.updateRuntime(accountID, func(account *Account, runtimeState *accountRuntimeState) (bool, func(*Account), error) {
+		if len(runtimeState.Cooldowns) == 0 {
+			return false, nil, nil
+		}
+		runtimeState.Cooldowns = make(map[string]CooldownState)
+		return true, nil, nil
+	})
+	return err
+}
+
 func (p *AccountPool) ClearCooldownIfGeneration(
 	accountID string,
 	modelAccessScope string,
