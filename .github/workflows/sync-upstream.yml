@@ -88,10 +88,10 @@ The maintained branch \`${TARGET_BRANCH}\` encountered git merge conflicts with 
 ${conflict_files}
 \`\`\`
 
-【呼叫 LXC Pi 审查指令】
-1. 检查上游在上述文件中的最新改动；
-2. 若上游改动已覆盖相应业务需求，调整并解决冲突；
-3. 测试通过后推送到 \`${TARGET_BRANCH}\`。
+Review required:
+1. Inspect upstream changes in the conflicting files.
+2. If upstream changes cover downstream requirements, adapt and resolve conflicts.
+3. Verify build and tests, then update \`${TARGET_BRANCH}\`.
 EOF
             existing="$(gh issue list --state open --search "[upstream-sync] Merge conflict ${upstream_sha:0:8} in:title" --json number --jq 'length')"
             if [ "$existing" = "0" ]; then
@@ -123,18 +123,18 @@ EOF
             cat > "$body_file" <<EOF
 ## Local patch reconciliation needed
 
-The maintained branch \`${TARGET_BRANCH}\` merged upstream code, but atomic patch \`${failed_patch}\` failed to apply cleanly.
+The maintained branch \`${TARGET_BRANCH}\` merged upstream code, but patch \`${failed_patch}\` failed to apply cleanly.
 
 - **Upstream commit**: \`${upstream_sha}\` ("${upstream_title}")
 - **Failed patch**: \`${failed_patch}\`
 - **Patch Intent Registry**: See \`patches/PATCHES.md\`
 
-【呼叫 LXC Pi 审查与决策指令】
-1. 查阅 \`patches/PATCHES.md\` 中 \`${failed_patch}\` 的意图；
-2. 检查上游对应文件的最新实现：
-   - 若上游已原生满足该意图：直接删除 \`${failed_patch}\`，遵循上游原生逻辑；
-   - 若上游未实现（仅代码上下文漂移）：结合上游新上下文重新生成该补丁；
-3. 本地验证编译，确认后提交推送到 \`${TARGET_BRANCH}\`。
+Review required:
+1. Refer to \`patches/PATCHES.md\` for the intent of \`${failed_patch}\`.
+2. Check upstream's latest implementation:
+   - If upstream natively covers this intent: remove \`${failed_patch}\` and follow upstream logic.
+   - If upstream does not cover it (context shifted): rebase/regenerate the patch against the new context.
+3. Verify compilation and push the updated branch.
 EOF
             existing="$(gh issue list --state open --search "[upstream-sync] Patch ${failed_patch} in:title" --json number --jq 'length')"
             if [ "$existing" = "0" ]; then

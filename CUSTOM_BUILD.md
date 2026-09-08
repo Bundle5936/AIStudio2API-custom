@@ -24,4 +24,4 @@ The image workflow builds `linux/amd64` and `linux/arm64` and publishes both `la
 
 `.github/workflows/sync-upstream.yml` periodically checks `Mag1cFall/AIStudio2API:main`.
 - If clean and patches apply, tests and pushes to `main` -> triggers image build.
-- If upstream implements a feature or conflicts, CI halts, files an issue with structured instructions, and alerts for LXC Pi review.
+- If upstream implements a feature or conflicts, CI halts, files an issue with structured instructions, and alerts for review.
