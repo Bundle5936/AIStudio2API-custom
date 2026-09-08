@@ -36,7 +36,7 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 	}
 	for name := range schema {
 		if !allowed[name] {
-			return nil, &UnverifiedProtocolError{Feature: "JSON schema 字段 " + name}
+			delete(schema, name)
 		}
 	}
 	typeName, err := schemaType(schema)
@@ -83,6 +83,9 @@ func encodeJSONSchema(raw json.RawMessage) ([]any, error) {
 			return nil, fmt.Errorf("schema.items: %w", err)
 		}
 		wire = setWireField(wire, 5, items)
+	}
+	if typeCode == 5 && (len(wire) <= 5 || wire[5] == nil) {
+		wire = setWireField(wire, 5, []any{1}) // Google Protobuf 严格要求 ARRAY 类型必须包含 items，缺失时默认补齐 string
 	}
 	for _, field := range []struct {
 		name  string
@@ -351,10 +354,18 @@ func schemaString(raw json.RawMessage, name string) (string, error) {
 
 func schemaStrings(raw json.RawMessage, name string) ([]string, error) {
 	var values []string
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return nil, fmt.Errorf("schema.%s 必须是字符串数组", name)
+	if err := json.Unmarshal(raw, &values); err == nil {
+		return values, nil
 	}
-	return values, nil
+	var anyValues []any
+	if err := json.Unmarshal(raw, &anyValues); err == nil {
+		strValues := make([]string, len(anyValues))
+		for i, v := range anyValues {
+			strValues[i] = fmt.Sprint(v)
+		}
+		return strValues, nil
+	}
+	return nil, fmt.Errorf("schema.%s 必须是数组", name)
 }
 
 func setWireField(wire []any, index int, value any) []any {
