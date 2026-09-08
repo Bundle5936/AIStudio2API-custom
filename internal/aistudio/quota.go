@@ -53,9 +53,15 @@ func QuotaCooldownForError(err error, now time.Time) (QuotaCooldown, bool) {
 		}, true
 	}
 	if dailyQuotaEvidence(evidence) || strings.Contains(message, "you exceeded your current quota") {
+		until := now.Add(2 * time.Minute)
+		kind := "配额限制"
+		if dailyQuotaEvidence(evidence) {
+			until = now.Add(15 * time.Minute)
+			kind = "每日限额"
+		}
 		return QuotaCooldown{
-			Until: nextQuotaDay(now), Kind: "每日限额",
-			Reason: "每日限额: " + err.Error(),
+			Until: until, Kind: kind,
+			Reason: kind + ": " + err.Error(),
 		}, true
 	}
 	return QuotaCooldown{}, false
