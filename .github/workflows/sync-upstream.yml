@@ -19,10 +19,10 @@ env:
 
 jobs:
   sync:
-    name: Sync upstream and reconcile patches
+    name: Sync upstream with downstream file guard
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout fork
+      - name: Check out maintained branch
         uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_BRANCH }}
@@ -39,146 +39,150 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: 'web/package-lock.json'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
-      - name: Fetch and test upstream merge
-        id: sync_check
+      - name: Compare upstream and downstream file sets
+        id: compare
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          set -u
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" || true
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null || true
           git fetch upstream main --prune
 
           upstream_sha="$(git rev-parse upstream/main)"
           upstream_title="$(git log -1 --format=%s upstream/main)"
-          echo "upstream_sha=${upstream_sha}" >> "$GITHUB_OUTPUT"
-          echo "upstream_title=${upstream_title}" >> "$GITHUB_OUTPUT"
-          echo "Upstream main commit: ${upstream_sha} - ${upstream_title}"
-
           if git merge-base --is-ancestor upstream/main HEAD; then
-            echo "already_current=true" >> "$GITHUB_OUTPUT"
-            echo "Already up-to-date with upstream main."
+            echo "status=already_current" >> "$GITHUB_OUTPUT"
+            echo "upstream_sha=${upstream_sha}" >> "$GITHUB_OUTPUT"
+            echo "upstream_title=${upstream_title}" >> "$GITHUB_OUTPUT"
+            echo "Upstream is already contained in ${TARGET_BRANCH}."
             exit 0
           fi
-          echo "already_current=false" >> "$GITHUB_OUTPUT"
 
-          test_branch="test-sync-$(date +%s)"
-          git checkout -b "$test_branch"
+          # The merge base is the last upstream revision already represented by
+          # the maintained branch. Compare only changes since that revision.
+          old_base="$(git merge-base HEAD upstream/main)"
+          upstream_files="$(git diff --name-only "$old_base" upstream/main | sort -u)"
+          downstream_files="$(git diff --name-only "$old_base" HEAD | sort -u)"
+          overlap="$(comm -12 \
+            <(printf '%s\n' "$upstream_files" | sed '/^$/d' | sort -u) \
+            <(printf '%s\n' "$downstream_files" | sed '/^$/d' | sort -u) \
+          )"
 
-          # 1. Merge upstream/main into test workspace
+          {
+            echo "upstream_sha=${upstream_sha}"
+            echo "upstream_title<<SYNC_EOF"
+            echo "$upstream_title"
+            echo "SYNC_EOF"
+            echo "old_base=${old_base}"
+            echo "upstream_files<<SYNC_EOF"
+            echo "$upstream_files"
+            echo "SYNC_EOF"
+            echo "downstream_files<<SYNC_EOF"
+            echo "$downstream_files"
+            echo "SYNC_EOF"
+            echo "overlap<<SYNC_EOF"
+            echo "$overlap"
+            echo "SYNC_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ -n "$overlap" ]; then
+            body_file="$(mktemp)"
+            {
+              echo "## Downstream review required"
+              echo
+              echo "The upstream update overlaps files changed by this downstream fork. The maintained branch was not changed."
+              echo
+              echo "- Upstream repository: ${UPSTREAM_REPO}"
+              echo "- Upstream commit: ${upstream_sha} (${upstream_title})"
+              echo "- Previously synchronized base: ${old_base}"
+              echo
+              echo "### Overlapping files"
+              echo '```text'
+              echo "$overlap"
+              echo '```'
+              echo
+              echo "### Review policy"
+              echo "1. Inspect the upstream changes in the overlapping files."
+              echo "2. If upstream already provides the downstream behavior, remove the redundant local code and follow upstream."
+              echo "3. If upstream only changed the surrounding implementation, adapt the downstream behavior to the new code."
+              echo "4. Run the repository validation and push the reviewed result."
+              echo
+              echo "Actions run: https://github.com/${GITHUB_REPOSITORY}/actions"
+            } > "$body_file"
+
+            existing="$(gh issue list --state open --search "[upstream-sync] Review ${upstream_sha:0:8} in:title" --json number --jq 'length')"
+            if [ "$existing" = "0" ]; then
+              gh issue create \
+                --title "[upstream-sync] Review overlapping downstream files (${upstream_sha:0:8})" \
+                --body-file "$body_file" || true
+            fi
+            rm -f "$body_file"
+            echo "status=overlap" >> "$GITHUB_OUTPUT"
+            exit 10
+          fi
+
+          candidate_branch="sync-check-${GITHUB_RUN_ID}"
+          git checkout -b "$candidate_branch"
           if ! git merge --no-commit --no-ff upstream/main; then
-            echo "Git merge conflict with upstream/main"
-            conflict_files="$(git diff --name-only --diff-filter=U | sort)"
+            conflict_files="$(git diff --name-only --diff-filter=U | sort -u || true)"
             git merge --abort || git reset --hard HEAD
-            
             body_file="$(mktemp)"
             {
-              echo "## Upstream sync conflict"
-              echo ""
-              echo "The maintained branch \`${TARGET_BRANCH}\` encountered git merge conflicts with \`${UPSTREAM_REPO}:main\`."
-              echo ""
-              echo "- **Upstream commit**: \`${upstream_sha}\` (\"${upstream_title}\")"
-              echo "- **Conflicting files**:"
+              echo "## Upstream merge conflict"
+              echo
+              echo "The file guard found no direct overlap, but the candidate merge still conflicted. The maintained branch was not changed."
+              echo
+              echo "- Upstream commit: ${upstream_sha}"
+              echo "- **Conflict files**:"
+              echo '```text'
+              echo "$conflict_files"
               echo '```'
-              echo "${conflict_files}"
-              echo '```'
-              echo ""
-              echo "Review required:"
-              echo "1. Inspect upstream changes in the conflicting files."
-              echo "2. If upstream changes cover downstream requirements, adapt and resolve conflicts."
-              echo "3. Verify build and tests, then update \`${TARGET_BRANCH}\`."
+              echo
+              echo "Actions run: https://github.com/${GITHUB_REPOSITORY}/actions"
             } > "$body_file"
-
-            existing="$(gh issue list --state open --search "[upstream-sync] Merge conflict ${upstream_sha:0:8} in:title" --json number --jq 'length')"
-            if [ "$existing" = "0" ]; then
-              gh issue create \
-                --title "[upstream-sync] Merge conflict with upstream main (${upstream_sha:0:8})" \
-                --body-file "$body_file" || true
-            fi
+            gh issue create \
+              --title "[upstream-sync] Merge conflict (${upstream_sha:0:8})" \
+              --body-file "$body_file" || true
             rm -f "$body_file"
-            echo "status=conflict" >> "$GITHUB_OUTPUT"
+            echo "status=merge_conflict" >> "$GITHUB_OUTPUT"
             exit 10
           fi
 
-          # 2. Check each atomic patch
-          failed_patch=""
-          for p in patches/*.patch; do
-            if [ ! -f "$p" ]; then continue; fi
-            echo "Testing patch: $p"
-            if ! patch -p1 --dry-run < "$p"; then
-              failed_patch="$p"
-              break
-            fi
-          done
-
-          if [ -n "$failed_patch" ]; then
-            echo "Patch application failed: $failed_patch"
-            git merge --abort || git reset --hard HEAD
-            
-            body_file="$(mktemp)"
-            {
-              echo "## Local patch reconciliation needed"
-              echo ""
-              echo "The maintained branch \`${TARGET_BRANCH}\` merged upstream code, but patch \`${failed_patch}\` failed to apply cleanly."
-              echo ""
-              echo "- **Upstream commit**: \`${upstream_sha}\` (\"${upstream_title}\")"
-              echo "- **Failed patch**: \`${failed_patch}\`"
-              echo "- **Patch Intent Registry**: See \`patches/PATCHES.md\`"
-              echo ""
-              echo "Review required:"
-              echo "1. Refer to \`patches/PATCHES.md\` for the intent of \`${failed_patch}\`."
-              echo "2. Check upstream's latest implementation:"
-              echo "   - If upstream natively covers this intent: remove \`${failed_patch}\` and follow upstream logic."
-              echo "   - If upstream does not cover it: rebase/regenerate the patch against the new context."
-              echo "3. Verify compilation and push the updated branch."
-            } > "$body_file"
-
-            existing="$(gh issue list --state open --search "[upstream-sync] Patch ${failed_patch} in:title" --json number --jq 'length')"
-            if [ "$existing" = "0" ]; then
-              gh issue create \
-                --title "[upstream-sync] Patch reconciliation needed for ${failed_patch} (${upstream_sha:0:8})" \
-                --body-file "$body_file" || true
-            fi
-            rm -f "$body_file"
-            echo "status=patch_failed" >> "$GITHUB_OUTPUT"
-            exit 10
-          fi
-
-          # 3. Apply all patches in test workspace
-          for p in patches/*.patch; do
-            if [ -f "$p" ]; then
-              echo "Applying: $p"
-              patch -p1 < "$p"
-            fi
-          done
-
+          echo "candidate_branch=${candidate_branch}" >> "$GITHUB_OUTPUT"
           echo "status=clean" >> "$GITHUB_OUTPUT"
+          echo "No downstream file overlap. Candidate merge is ready for validation."
 
-      - name: Verify compilation on merged and patched code
-        if: steps.sync_check.outputs.status == 'clean'
+      - name: Run Go validation
+        if: steps.compare.outputs.status == 'clean'
+        run: go test ./...
+
+      - name: Run frontend validation
+        if: steps.compare.outputs.status == 'clean'
+        working-directory: web
         run: |
-          echo "Verifying Go backend build..."
-          CGO_ENABLED=0 go build -ldflags="-s -w" -o /tmp/aistudio-verify ./cmd/aistudio2api
-          rm -f /tmp/aistudio-verify
-
-          echo "Verifying Web frontend build..."
-          cd web
           npm ci
           npm run build
-          cd ..
 
-      - name: Commit and push tested sync to main
-        if: steps.sync_check.outputs.status == 'clean'
+      - name: Validate the container build
+        if: steps.compare.outputs.status == 'clean'
+        run: docker build --file Dockerfile.custom --tag aistudio-omni:upstream-sync .
+
+      - name: Promote the validated candidate
+        if: steps.compare.outputs.status == 'clean'
         env:
-          UPSTREAM_SHA: ${{ steps.sync_check.outputs.upstream_sha }}
-          UPSTREAM_TITLE: ${{ steps.sync_check.outputs.upstream_title }}
+          CANDIDATE_BRANCH: ${{ steps.compare.outputs.candidate_branch }}
+          UPSTREAM_SHA: ${{ steps.compare.outputs.upstream_sha }}
+          UPSTREAM_TITLE: ${{ steps.compare.outputs.upstream_title }}
         run: |
+          set -euo pipefail
+          git commit -m "chore(sync): merge upstream main (${UPSTREAM_SHA:0:8})"
           git checkout "${TARGET_BRANCH}"
-          git merge --no-edit "upstream/main"
-          git commit --amend -m "chore(sync): merge upstream main (${UPSTREAM_SHA:0:8} ${UPSTREAM_TITLE})" || true
+          git merge --ff-only "${CANDIDATE_BRANCH}"
           git push origin "${TARGET_BRANCH}"
+          echo "Promoted upstream ${UPSTREAM_SHA} (${UPSTREAM_TITLE}) to ${TARGET_BRANCH}."
