@@ -1,0 +1,10 @@
+.git
+.github
+auth
+runtime
+.env
+*.log
+sync_auth.py
+node_modules
+web/node_modules
+web/dist

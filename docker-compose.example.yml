@@ -1,0 +1,16 @@
+name: aistudio-omni
+
+services:
+  app:
+    image: ghcr.io/bundle5936/aistudio-omni:latest
+    container_name: aistudio-omni
+    restart: unless-stopped
+    entrypoint: [/app/entrypoint.sh]
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - ./auth:/app/auth
+      - ./runtime:/app/runtime
+      - ./.env:/app/.env
+      - ./entrypoint.sh:/app/entrypoint.sh:ro
