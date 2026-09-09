@@ -1485,6 +1485,7 @@ func (l *AccountLease) Release() error {
 		} else if l.account.active > 0 {
 			l.account.active--
 		}
+		l.account.LastUsed = time.Now().UTC()
 		if l.account.active == 0 && !l.account.exclusive && l.account.authRefreshers == 0 && l.account.leaseLock != nil {
 			if err := l.account.leaseLock.Unlock(); err != nil {
 				l.err = err
@@ -2178,6 +2179,16 @@ func (p *AccountPool) tryAcquireLocked(selection AccountSelection, now time.Time
 					earliest = cooldown.Until
 				}
 				continue
+			}
+			const minAccountInterval = 2 * time.Second
+			if !account.LastUsed.IsZero() && account.active == 0 {
+				availableAt := account.LastUsed.Add(minAccountInterval)
+				if now.Before(availableAt) {
+					if earliest.IsZero() || availableAt.Before(earliest) {
+						earliest = availableAt
+					}
+					continue
+				}
 			}
 		}
 		refreshRuntime := false
