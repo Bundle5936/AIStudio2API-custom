@@ -1,0 +1,15 @@
+[Unit]
+Description=AIStudio to AIStudio-Omni Credential Auto-Sync Watchdog
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/uixb/aistudio-omni
+ExecStart=/usr/bin/python3 /uixb/aistudio-omni/watch_sync.py
+Restart=always
+RestartSec=5
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

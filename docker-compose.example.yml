@@ -7,10 +7,8 @@ services:
     restart: unless-stopped
     entrypoint: [/app/entrypoint.sh]
     network_mode: host
-    env_file:
-      - .env
     volumes:
       - ./auth:/app/auth
       - ./runtime:/app/runtime
       - ./.env:/app/.env
-      - ./entrypoint.sh:/app/entrypoint.sh:ro
+      - ./entrypoint.sh:/app/entrypoint.sh
