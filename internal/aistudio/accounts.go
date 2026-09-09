@@ -2372,6 +2372,7 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 			seen[candidateID] = struct{}{}
 			indices = append(indices, index)
 		}
+		p.sortByBenefitTierPriority(indices)
 		return indices, nil
 	}
 	indices := make([]int, 0, len(p.accounts))
@@ -2379,7 +2380,27 @@ func (p *AccountPool) selectionIndicesLocked(selection AccountSelection) ([]int,
 		index := (p.next + offset) % len(p.accounts)
 		indices = append(indices, index)
 	}
+	p.sortByBenefitTierPriority(indices)
 	return indices, nil
+}
+
+func (p *AccountPool) sortByBenefitTierPriority(indices []int) {
+	if len(indices) <= 1 {
+		return
+	}
+	sort.SliceStable(indices, func(i, j int) bool {
+		accountI := p.accounts[indices[i]]
+		accountJ := p.accounts[indices[j]]
+		priorityI := 0
+		priorityJ := 0
+		if accountI != nil {
+			priorityI = benefitTierPriority(accountI.BenefitTier)
+		}
+		if accountJ != nil {
+			priorityJ = benefitTierPriority(accountJ.BenefitTier)
+		}
+		return priorityI > priorityJ
+	})
 }
 
 func (p *AccountPool) setAccountState(accountID string, state AccountState, reason string) error {
