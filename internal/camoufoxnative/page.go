@@ -39,6 +39,12 @@ func fillPromptExpression(prompt string) string {
 })()`, encoded, encoded)
 }
 
+// submitPromptReadyExpression 检查官网当前 Run 提交按钮是否可见且已解除禁用
+const submitPromptReadyExpression = `(() => {` + pageDOMHelpers + `
+  const button = [...document.querySelectorAll('ms-run-button button')].filter(visible)[0];
+  return Boolean(button && buttonEnabled(button));
+})()`
+
 // submitPromptExpression 点击官网当前可见且启用的提交按钮
 const submitPromptExpression = `(() => {` + pageDOMHelpers + `
   const button = uniqueVisible('ms-run-button button', '官网 Run 按钮');
