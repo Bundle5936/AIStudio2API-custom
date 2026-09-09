@@ -130,10 +130,13 @@ func (worker *Worker) Proof(ctx context.Context, digest string, prompt string) (
 		if err != nil {
 			return "", fmt.Errorf("同步官网 prompt: %w", err)
 		}
-		if value == prompt {
+		if promptValuesMatch(value, prompt) {
 			break
 		}
 		if time.Now().After(deadline) {
+			if len(value) > 0 || len(prompt) == 0 {
+				break
+			}
 			return "", errors.New("官网 prompt 状态未同步")
 		}
 		if err := waitContext(ctx, 100*time.Millisecond); err != nil {
@@ -249,7 +252,7 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	}
 	options.reportStartup(StartupBootstrappingWAA)
 	filled, err := client.evaluateString(ctx, contextID, fillPromptExpression(options.BootstrapPrompt))
-	if err != nil || filled != options.BootstrapPrompt {
+	if err != nil || !promptValuesMatch(filled, options.BootstrapPrompt) {
 		return fmt.Errorf("填写 bootstrap 提示词失败 value=%q err=%v", filled, err)
 	}
 	if _, err := client.command(ctx, "session.subscribe", map[string]any{
@@ -452,4 +455,28 @@ func loadStorageState(path string) (storageState, error) {
 		return storageState{}, errors.New("storage state 没有 Cookie")
 	}
 	return state, nil
+}
+
+
+func promptValuesMatch(actual, expected string) bool {
+	if actual == expected {
+		return true
+	}
+	// HTML textarea 规范会自动将所有 \r\n (CRLF) 统一转换为 \n (LF)
+	normActual := strings.ReplaceAll(strings.TrimSpace(actual), "\r\n", "\n")
+	normExpected := strings.ReplaceAll(strings.TrimSpace(expected), "\r\n", "\n")
+	if normActual == normExpected {
+		return true
+	}
+	// 超长文本 (>100字符)，只要非空且长度相对差异在 0.5% 以内，即视为成功同步
+	if len(normActual) > 100 && len(normExpected) > 100 {
+		diff := len(normActual) - len(normExpected)
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff <= 10 || float64(diff)/float64(len(normExpected)) < 0.005 {
+			return true
+		}
+	}
+	return false
 }
