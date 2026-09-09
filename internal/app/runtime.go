@@ -2972,6 +2972,14 @@ func (service *trackedService) generateWithRetry(
 			modelID, strings.TrimSpace(err.Error()),
 		)
 		service.requests.log(accountLabel, "WARN", switchMessage)
+		select {
+		case <-requestCtx.Done():
+			err = errors.Join(err, requestCtx.Err())
+		case <-time.After(500 * time.Millisecond):
+		}
+		if requestCtx.Err() != nil {
+			break
+		}
 	}
 	if err != nil {
 		if activity != nil {
