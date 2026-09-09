@@ -225,11 +225,7 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	}); err != nil && !strings.Contains(err.Error(), "NS_ERROR_ABORT") {
 		return fmt.Errorf("导航 AI Studio: %w", err)
 	}
-	if err := client.waitFor(ctx, contextID, `(() => {
-	  if (location.hostname === 'accounts.google.com') return true;
-  const item = document.querySelector('ms-prompt-box textarea:last-of-type') || [...document.querySelectorAll('ms-prompt-box textarea')].at(-1);
-  return Boolean(item && item.offsetParent !== null);
-})()`, 120*time.Second); err != nil {
+	if err := client.waitFor(ctx, contextID, workerPageReadyExpression, 120*time.Second); err != nil {
 		pageURL, _ := client.evaluateString(ctx, contextID, "location.href")
 		return fmt.Errorf("AI Studio 输入框未就绪 url=%s: %w", pageURL, err)
 	}
@@ -279,32 +275,8 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 	if interceptID == "" {
 		return errors.New("GenerateContent 拦截 ID 无效")
 	}
-	diag, _ := client.evaluateString(ctx, contextID, `(() => {
-  const msRun = document.querySelector('ms-run-button');
-  if (!msRun) {
-    const all = [...document.querySelectorAll('button')].map(b => (b.innerText||b.getAttribute('aria-label')||b.className).trim()).filter(Boolean);
-    return 'NO_MS_RUN: ' + all.slice(0, 10).join('; ');
-  }
-  const btn = msRun.querySelector('button');
-  if (!btn) return 'NO_BTN_IN_MSRUN: ' + msRun.outerHTML.substring(0, 150);
-  return 'FOUND: tag=' + btn.tagName + ' type=' + btn.type + ' disabled=' + btn.disabled + ' text=' + btn.innerText;
-})()`)
-	clicked, err := client.evaluateBool(ctx, contextID, `(() => {
-  const msRun = document.querySelector('ms-run-button');
-  let button = msRun ? msRun.querySelector('button') : null;
-  if (!button) {
-    button = [...document.querySelectorAll('button')].find(b => /Run/i.test(b.innerText || b.getAttribute('aria-label') || ''));
-  }
-  if (!button) return false;
-  if (button.disabled) {
-    button.removeAttribute('disabled');
-    button.disabled = false;
-  }
-  button.click();
-  return true;
-})()`)
-	if err != nil || !clicked {
-		return fmt.Errorf("官网 Run 按钮不可用 clicked=%t diag=%s err=%v", clicked, diag, err)
+	if _, err := client.evaluate(ctx, contextID, submitPromptExpression); err != nil {
+		return fmt.Errorf("提交官网提示词: %w", err)
 	}
 	if err := client.waitFor(ctx, contextID, "Boolean(window.__aistudioWaaService)", 60*time.Second); err != nil {
 		return fmt.Errorf("官网 WAA service 未暴露: %w", err)
@@ -367,29 +339,6 @@ func (worker *Worker) bootstrap(ctx context.Context, options Options, storage st
 		Timezone:    timezone,
 		SnapshotKey: snapshotKey,
 		Headers:     headers,
-	}
-	return nil
-}
-
-func dismissKnownOverlays(ctx context.Context, client *bidiClient, contextID string) error {
-	_, err := client.evaluate(ctx, contextID, `(() => {
-  const selectors = [
-    'ms-g1-welcome-dialog button[aria-label="Close dialog"]',
-    'button[aria-label="Close guided tour"]',
-    '#glue-cookie-notification-bar-1 .glue-cookie-notification-bar__reject'
-  ];
-  let clicked = 0;
-  for (const selector of selectors) {
-    const button = document.querySelector(selector);
-    if (button instanceof HTMLElement && button.offsetParent !== null && !button.disabled) {
-      button.click();
-      clicked++;
-    }
-  }
-  return clicked;
-})()`)
-	if err != nil {
-		return fmt.Errorf("处理 AI Studio 启动覆盖层: %w", err)
 	}
 	return nil
 }
