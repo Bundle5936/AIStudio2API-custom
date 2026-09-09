@@ -26,8 +26,7 @@ jobs:
   build:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' &&
-       startsWith(github.event.head_commit.message, 'chore(sync): merge upstream main'))
+      github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

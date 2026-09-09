@@ -210,6 +210,30 @@ func firefoxPreferences(proxyValue, bypass string) (map[string]any, error) {
 		"devtools.chrome.enabled":           true,
 		"devtools.debugger.remote-enabled":  true,
 		"browser.shell.checkDefaultBrowser": false,
+
+		// Headless server low-power optimizations:
+		// Prevents 100% CPU spinning caused by software WebRender rasterization and continuous web animations
+		"gfx.webrender.all":                  false,
+		"layers.acceleration.disabled":       true,
+		"toolkit.cosmeticAnimations.enabled": false,
+		"browser.cache.disk.enable":          false,
+		"media.autoplay.default":             5,
+		"media.volume_scale":                 "0.0",
+		"general.smoothScroll":               false,
+		"layout.frame_rate":                  1,
+		"image.animation_mode":               "none",
+	}
+
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("DISABLE_HEADLESS_OPTIMIZATIONS")), "true") {
+		delete(prefs, "gfx.webrender.all")
+		delete(prefs, "layers.acceleration.disabled")
+		delete(prefs, "toolkit.cosmeticAnimations.enabled")
+		delete(prefs, "browser.cache.disk.enable")
+		delete(prefs, "media.autoplay.default")
+		delete(prefs, "media.volume_scale")
+		delete(prefs, "general.smoothScroll")
+		delete(prefs, "layout.frame_rate")
+		delete(prefs, "image.animation_mode")
 	}
 	proxyValue = strings.TrimSpace(proxyValue)
 	if proxyValue == "" {
